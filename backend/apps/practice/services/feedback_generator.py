@@ -1,9 +1,10 @@
 """
 Feedback Generator Service
-Generates personalized coaching feedback using Claude AI
+Generates personalized coaching feedback using Google Gemini AI
 """
-import anthropic
+import google.generativeai as genai
 from django.conf import settings
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -13,8 +14,8 @@ class FeedbackGenerator:
     """Generate personalized pitch coaching feedback"""
     
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = "claude-sonnet-4-20250514"
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        self.model = genai.GenerativeModel("gemini-2.0-flash")
     
     def generate(self, session, metrics, pitch_deck=None):
         """
@@ -33,16 +34,9 @@ class FeedbackGenerator:
             
             logger.info(f"Generating feedback for session {session.id}")
             
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=2000,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+            message = self.model.generate_content(prompt)
+            response_text = message.text
             
-            response_text = message.content[0].text
             feedback_data = self._parse_feedback(response_text, metrics)
             
             logger.info(f"Feedback generated for session {session.id}")
@@ -106,10 +100,7 @@ Return ONLY valid JSON, no other text."""
     
     def _parse_feedback(self, response_text, metrics):
         """Parse AI feedback response"""
-        import json
-        
         try:
-            # Clean response
             response_text = response_text.strip()
             if response_text.startswith('```json'):
                 response_text = response_text.replace('```json', '').replace('```', '').strip()
@@ -118,7 +109,6 @@ Return ONLY valid JSON, no other text."""
             
             feedback = json.loads(response_text)
             
-            # Ensure all required fields
             feedback.setdefault('confidence_score', 75)
             feedback.setdefault('content_score', 75)
             feedback.setdefault('structure_score', 75)
@@ -126,11 +116,9 @@ Return ONLY valid JSON, no other text."""
             feedback.setdefault('strengths', ['Clear delivery'])
             feedback.setdefault('improvements', ['Keep practicing'])
             
-            # Add metric scores
             feedback['pace_score'] = metrics['pace_score']
             feedback['clarity_score'] = metrics['clarity_score']
             
-            # Calculate overall score
             feedback['overall_score'] = round((
                 feedback['pace_score'] +
                 feedback['clarity_score'] +

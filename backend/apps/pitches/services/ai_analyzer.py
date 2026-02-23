@@ -1,8 +1,8 @@
 """
 AI Analyzer Service
-Uses Claude API to analyze pitch deck slides
+Uses Google Gemini API to analyze pitch deck slides
 """
-import anthropic
+import google.generativeai as genai
 from django.conf import settings
 import json
 import logging
@@ -11,11 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 class AIAnalyzer:
-    """Analyze slides using Claude AI"""
+    """Analyze slides using Gemini AI"""
     
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = "claude-sonnet-4-20250514"
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        self.model = genai.GenerativeModel("gemini-2.0-flash")
     
     def analyze_slide(self, slide_number, text_content, has_images=False, has_charts=False):
         """
@@ -38,19 +38,11 @@ class AIAnalyzer:
                 has_charts
             )
             
-            logger.info(f"Analyzing slide {slide_number} with Claude")
+            logger.info(f"Analyzing slide {slide_number} with Gemini")
             
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=2000,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+            message = self.model.generate_content(prompt)
+            response_text = message.text
             
-            # Parse response
-            response_text = message.content[0].text
             analysis = self._parse_analysis_response(response_text)
             
             logger.info(f"Slide {slide_number} analyzed successfully")
@@ -58,11 +50,10 @@ class AIAnalyzer:
             
         except Exception as e:
             logger.error(f"Error analyzing slide {slide_number}: {str(e)}")
-            # Return default analysis on error
             return self._get_default_analysis()
     
     def _build_slide_analysis_prompt(self, slide_number, text_content, has_images, has_charts):
-        """Build the prompt for Claude"""
+        """Build the prompt for Gemini"""
         
         prompt = f"""You are an expert pitch coach analyzing a startup pitch deck slide.
 
@@ -123,21 +114,17 @@ IMPORTANT: Return ONLY valid JSON, no other text."""
         return prompt
     
     def _parse_analysis_response(self, response_text):
-        """Parse Claude's JSON response"""
+        """Parse Gemini's JSON response"""
         try:
-            # Try to extract JSON from response
             response_text = response_text.strip()
             
-            # Remove markdown code blocks if present
             if response_text.startswith('```json'):
                 response_text = response_text.replace('```json', '').replace('```', '').strip()
             elif response_text.startswith('```'):
                 response_text = response_text.replace('```', '').strip()
             
-            # Parse JSON
             analysis = json.loads(response_text)
             
-            # Validate required fields
             required_fields = [
                 'slide_type', 'quality_score', 'strengths', 'weaknesses',
                 'suggestions', 'coaching_script', 'key_points', 'estimated_speaking_time'

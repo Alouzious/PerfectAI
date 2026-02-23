@@ -2,7 +2,7 @@
 Question Generator Service
 Generates investor questions based on pitch deck content
 """
-import anthropic
+import google.generativeai as genai
 from django.conf import settings
 import json
 import logging
@@ -14,8 +14,8 @@ class QuestionGenerator:
     """Generate investor questions for pitch decks"""
     
     def __init__(self):
-        self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = "claude-sonnet-4-20250514"
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        self.model = genai.GenerativeModel("gemini-2.0-flash")
     
     def generate(self, pitch_deck):
         """
@@ -28,24 +28,14 @@ class QuestionGenerator:
             list: Generated questions with metadata
         """
         try:
-            # Get slide content
             slides_content = self._get_slides_content(pitch_deck)
-            
-            # Build prompt
             prompt = self._build_generation_prompt(pitch_deck, slides_content)
             
             logger.info(f"Generating questions for pitch deck: {pitch_deck.title}")
             
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=3000,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+            message = self.model.generate_content(prompt)
+            response_text = message.text
             
-            response_text = message.content[0].text
             questions = self._parse_questions(response_text)
             
             logger.info(f"Generated {len(questions)} questions")
@@ -64,7 +54,7 @@ class QuestionGenerator:
             content_summary.append({
                 'number': slide.slide_number,
                 'type': slide.slide_type,
-                'text': slide.text_content[:200],  # First 200 chars
+                'text': slide.text_content[:200],
             })
         
         return content_summary
@@ -127,7 +117,6 @@ Return ONLY valid JSON array, no other text."""
     def _parse_questions(self, response_text):
         """Parse AI response into question objects"""
         try:
-            # Clean response
             response_text = response_text.strip()
             if response_text.startswith('```json'):
                 response_text = response_text.replace('```json', '').replace('```', '').strip()
@@ -136,7 +125,6 @@ Return ONLY valid JSON array, no other text."""
             
             questions = json.loads(response_text)
             
-            # Validate and clean questions
             validated_questions = []
             for q in questions:
                 if 'question_text' in q and 'category' in q:

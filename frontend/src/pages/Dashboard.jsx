@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { pitchAPI } from '../services/api';
+import UploadModal from '../components/pitches/UploadModal';
+import PitchDeckModal from '../components/pitches/PitchDeckModal';
 import { 
   Sparkles, 
   FileText, 
@@ -29,6 +31,11 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  
+  // Modal states
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [selectedDeckId, setSelectedDeckId] = useState(null);
+  const [deckModalOpen, setDeckModalOpen] = useState(false);
 
   useEffect(() => {
     fetchPitchDecks();
@@ -53,14 +60,12 @@ const Dashboard = () => {
   const filterDecks = () => {
     let filtered = pitchDecks;
 
-    // Filter by search query
     if (searchQuery.trim()) {
       filtered = filtered.filter(deck =>
         deck.title.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 
-    // Filter by status
     if (statusFilter !== 'all') {
       filtered = filtered.filter(deck => deck.status === statusFilter);
     }
@@ -76,6 +81,15 @@ const Dashboard = () => {
   const clearFilters = () => {
     setSearchQuery('');
     setStatusFilter('all');
+  };
+
+  const handleUploadSuccess = () => {
+    fetchPitchDecks(); // Refresh list
+  };
+
+  const handleViewDeck = (deckId) => {
+    setSelectedDeckId(deckId);
+    setDeckModalOpen(true);
   };
 
   const getStatusBadge = (status) => {
@@ -112,14 +126,14 @@ const Dashboard = () => {
         <div className="container-custom">
           <div className="flex items-center justify-between py-4">
             {/* Logo */}
-            <Link to="/dashboard" className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-3">
               <div className="w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
                 <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               </div>
               <span className="text-lg sm:text-xl font-bold text-white hidden sm:block">
                 Pitch Perfect AI
               </span>
-            </Link>
+            </div>
 
             {/* User Menu */}
             <div className="flex items-center gap-2 sm:gap-3">
@@ -142,7 +156,6 @@ const Dashboard = () => {
 
               {/* Action Buttons */}
               <button 
-                onClick={() => navigate('/settings')}
                 className="p-2 sm:p-2.5 text-gray-400 hover:text-white hover:bg-white/10 rounded-lg transition-all"
                 title="Settings"
               >
@@ -178,9 +191,9 @@ const Dashboard = () => {
         {/* Main Upload Card - Only show if no decks */}
         {pitchDecks.length === 0 && (
           <div className="mb-8 sm:mb-12">
-            <Link 
-              to="/upload" 
-              className="group relative block bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl sm:rounded-3xl p-6 sm:p-8 lg:p-10 overflow-hidden hover:shadow-glow-lg transition-all"
+            <button
+              onClick={() => setUploadModalOpen(true)}
+              className="group relative block w-full bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl sm:rounded-3xl p-6 sm:p-8 lg:p-10 overflow-hidden hover:shadow-glow-lg transition-all"
             >
               <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl transform translate-x-32 -translate-y-32"></div>
               
@@ -200,7 +213,7 @@ const Dashboard = () => {
                   <span>Upload Pitch Deck</span>
                 </div>
               </div>
-            </Link>
+            </button>
           </div>
         )}
 
@@ -245,12 +258,13 @@ const Dashboard = () => {
               </div>
 
               {/* Upload Button */}
-              <Link to="/upload">
-                <button className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 sm:py-3.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-semibold hover:shadow-glow transition-all whitespace-nowrap">
-                  <Upload className="w-5 h-5" />
-                  <span>Upload</span>
-                </button>
-              </Link>
+              <button
+                onClick={() => setUploadModalOpen(true)}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 sm:py-3.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-xl font-semibold hover:shadow-glow transition-all whitespace-nowrap"
+              >
+                <Upload className="w-5 h-5" />
+                <span>Upload</span>
+              </button>
             </div>
 
             {/* Active Filters Info */}
@@ -343,20 +357,19 @@ const Dashboard = () => {
                       {/* Action Buttons */}
                       {deck.status === 'completed' ? (
                         <div className="flex gap-2 pt-4 border-t border-white/10">
-                          <Link to={`/pitch/${deck.id}`} className="flex-1">
-                            <button className="w-full px-4 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg text-sm font-semibold hover:shadow-glow transition-all flex items-center justify-center gap-2">
-                              <FileText className="w-4 h-4" />
-                              View
-                            </button>
-                          </Link>
-                          <Link to={`/practice/${deck.id}`}>
-                            <button 
-                              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white rounded-lg transition-all"
-                              title="Practice"
-                            >
-                              <Mic className="w-4 h-4" />
-                            </button>
-                          </Link>
+                          <button
+                            onClick={() => handleViewDeck(deck.id)}
+                            className="flex-1 px-4 py-2.5 bg-gradient-to-r from-purple-600 to-pink-600 text-white rounded-lg text-sm font-semibold hover:shadow-glow transition-all flex items-center justify-center gap-2"
+                          >
+                            <FileText className="w-4 h-4" />
+                            View
+                          </button>
+                          <button 
+                            className="px-4 py-2.5 bg-white/10 hover:bg-white/20 border border-white/20 text-white rounded-lg transition-all"
+                            title="Practice"
+                          >
+                            <Mic className="w-4 h-4" />
+                          </button>
                         </div>
                       ) : deck.status === 'processing' ? (
                         <div className="pt-4 border-t border-white/10">
@@ -412,6 +425,19 @@ const Dashboard = () => {
         )}
 
       </div>
+
+      {/* Modals */}
+      <UploadModal 
+        isOpen={uploadModalOpen} 
+        onClose={() => setUploadModalOpen(false)}
+        onSuccess={handleUploadSuccess}
+      />
+
+      <PitchDeckModal
+        isOpen={deckModalOpen}
+        onClose={() => setDeckModalOpen(false)}
+        deckId={selectedDeckId}
+      />
     </div>
   );
 };

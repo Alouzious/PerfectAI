@@ -6,7 +6,6 @@ import LandingPage from './pages/LandingPage';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Dashboard from './pages/Dashboard';
-import UploadPitch from './pages/UploadPitch';
 
 // Protected Route wrapper
 const ProtectedRoute = ({ children }) => {
@@ -68,15 +67,6 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Dashboard />
-          </ProtectedRoute>
-        }
-      />
-
-      <Route
-        path="/upload"
-        element={
-          <ProtectedRoute>
-            <UploadPitch />
           </ProtectedRoute>
         }
       />
