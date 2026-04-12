@@ -1,6 +1,7 @@
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+import dj_database_url
 
 # Load environment variables
 load_dotenv()
@@ -11,7 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-change-this')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-# Update ALLOWED_HOSTS for production
+# Hosts
 if DEBUG:
     ALLOWED_HOSTS = ['localhost', '127.0.0.1', '*']
 else:
@@ -25,12 +26,12 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    
+
     # Third party
     'rest_framework',
     'corsheaders',
     'drf_yasg',
-    
+
     # Your apps
     'apps.accounts',
     'apps.pitches',
@@ -40,6 +41,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',       # serve static files on Render
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -69,13 +71,29 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'config.wsgi.application'
 
-# Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# ===== DATABASE =====
+# Locally: uses SQLite
+# On Render: uses Neon PostgreSQL via DATABASE_URL env var
+
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+if DATABASE_URL:
+    # Production — Neon PostgreSQL
+    DATABASES = {
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True,
+        )
     }
-}
+else:
+    # Local development — SQLite
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -91,24 +109,25 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-# Static files
+# ===== STATIC FILES =====
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
-# Media files
+# ===== MEDIA FILES =====
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # File upload limits
-FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800  # 50MB
-DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800  # 50MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800   # 50MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800   # 50MB
 MAX_PITCH_DECK_SIZE = 50 * 1024 * 1024  # 50MB
 ALLOWED_PITCH_DECK_EXTENSIONS = ['pdf', 'pptx', 'ppt']
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# REST Framework
+# ===== REST FRAMEWORK =====
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
@@ -126,34 +145,31 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
-    
-    # Throttling (prevent abuse)
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle'
+        'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '20/hour',  # Anonymous users
-        'user': '200/hour',  # Authenticated users
-    }
+        'anon': '20/hour',
+        'user': '200/hour',
+    },
 }
 
-# CORS - different for production
+# ===== CORS =====
 if DEBUG:
-    CORS_ALLOW_ALL_ORIGINS = True  # Development only
+    CORS_ALLOW_ALL_ORIGINS = True
 else:
     CORS_ALLOWED_ORIGINS = os.getenv(
-        'CORS_ALLOWED_ORIGINS',
-        'https://yourdomain.com'
+        'CORS_ALLOWED_ORIGINS', ''
     ).split(',')
 
 CORS_ALLOW_CREDENTIALS = True
 
-# ===== CSRF CONFIGURATION =====
-# Allow JS to read the CSRF cookie (must be False)
+# ===== CSRF =====
 CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = 'Lax'
 
-# Trust requests from the Vite dev server
+# Trusted origins — add Render URL here after deploy
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
@@ -161,52 +177,50 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:8000',
 ]
 
-# Anthropic API
-# ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+# Add Render URL to CSRF trusted origins in production
+RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL')
+if RENDER_EXTERNAL_URL:
+    CSRF_TRUSTED_ORIGINS.append(RENDER_EXTERNAL_URL)
 
+# ===== SECURITY (production only) =====
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
-# ===== CELERY CONFIGURATION =====
+# ===== API KEYS =====
+GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 
-# Celery broker (Redis)
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
-
-# Celery result backend (Redis)
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
-
-# Celery settings
+# ===== CELERY =====
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+CELERY_TASK_TIME_LIMIT = 30 * 60
+CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
+CELERY_RESULT_EXPIRES = 3600
 
-# Task time limits (prevent stuck tasks)
-CELERY_TASK_TIME_LIMIT = 30 * 60  # 30 minutes
-CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60  # 25 minutes
-
-# Task result expiry
-CELERY_RESULT_EXPIRES = 3600  # 1 hour
-
-# ===== SWAGGER/API DOCUMENTATION =====
-
+# ===== SWAGGER =====
 SWAGGER_SETTINGS = {
     'SECURITY_DEFINITIONS': {
-        'Basic': {
-            'type': 'basic'
-        },
+        'Basic': {'type': 'basic'},
         'Session': {
             'type': 'apiKey',
             'name': 'sessionid',
-            'in': 'cookie'
-        }
+            'in': 'cookie',
+        },
     },
     'USE_SESSION_AUTH': True,
     'LOGIN_URL': '/admin/login/',
     'LOGOUT_URL': '/admin/logout/',
 }
 
-# ===== LOGGING CONFIGURATION =====
-
+# ===== LOGGING =====
+# In production (Render) log to console only — no file logging needed
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,
@@ -215,19 +229,10 @@ LOGGING = {
             'format': '[{levelname}] {asctime} {name} {message}',
             'style': '{',
         },
-        'simple': {
-            'format': '[{levelname}] {message}',
-            'style': '{',
-        },
     },
     'handlers': {
         'console': {
             'class': 'logging.StreamHandler',
-            'formatter': 'verbose',
-        },
-        'file': {
-            'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'logs' / 'debug.log',
             'formatter': 'verbose',
         },
     },
@@ -236,25 +241,23 @@ LOGGING = {
         'level': 'INFO',
     },
     'loggers': {
-        'django': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-        'celery': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
-        },
-        'apps': {
-            'handlers': ['console', 'file'],
-            'level': 'INFO',
-            'propagate': False,
-        },
+        'django': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'celery': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'apps':   {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
     },
 }
 
+# Only log to file locally (avoids crash on Render where logs/ may not exist)
+if DEBUG:
+    LOGS_DIR = BASE_DIR / 'logs'
+    LOGS_DIR.mkdir(exist_ok=True)
+    LOGGING['handlers']['file'] = {
+        'class': 'logging.FileHandler',
+        'filename': LOGS_DIR / 'debug.log',
+        'formatter': 'verbose',
+    }
+    for logger in LOGGING['loggers'].values():
+        logger['handlers'].append('file')
 
 SESSION_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_HTTPONLY = True
-CSRF_COOKIE_SAMESITE = 'Lax'

@@ -1,140 +1,197 @@
 """
 Feedback Generator Service
-Generates personalized coaching feedback using Google Gemini AI
+Generates personalized coaching feedback using Groq (Llama 3.3 70B)
 """
-import google.generativeai as genai
-from django.conf import settings
+import os
 import json
 import logging
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 
 class FeedbackGenerator:
-    """Generate personalized pitch coaching feedback"""
-    
+    """Generate personalized pitch coaching feedback using Groq"""
+
+    MODEL = "llama-3.3-70b-versatile"
+
     def __init__(self):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel("gemini-2.0-flash")
-    
+        try:
+            from groq import Groq
+            self.client = Groq(api_key=self._get_api_key())
+        except ImportError:
+            raise ImportError(
+                "groq package is required. Install it with: pip install groq"
+            )
+
+    def _get_api_key(self):
+        """Get Groq API key from Django settings or environment"""
+        api_key = getattr(settings, 'GROQ_API_KEY', None) or os.getenv('GROQ_API_KEY')
+        if not api_key:
+            raise ValueError(
+                "GROQ_API_KEY is not set. Add it to your .env file."
+            )
+        return api_key
+
     def generate(self, session, metrics, pitch_deck=None):
         """
-        Generate personalized feedback for a practice session
-        
+        Generate personalized feedback for a practice session.
+
         Args:
-            session: PracticeSession object
-            metrics: Dict of analysis metrics
+            session:    PracticeSession object
+            metrics:    Dict of analysis metrics from TextAnalyzer
             pitch_deck: Optional PitchDeck object for context
-            
+
         Returns:
             dict: Feedback with scores and suggestions
         """
         try:
             prompt = self._build_feedback_prompt(session, metrics, pitch_deck)
-            
-            logger.info(f"Generating feedback for session {session.id}")
-            
-            message = self.model.generate_content(prompt)
-            response_text = message.text
-            
+
+            logger.info(f"Generating feedback for session {session.id} via Groq")
+
+            response = self.client.chat.completions.create(
+                model=self.MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert pitch coach. "
+                            "You always respond with valid JSON only — "
+                            "no markdown, no code fences, no extra text."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                temperature=0.7,
+                max_tokens=1000,
+            )
+
+            response_text = response.choices[0].message.content
             feedback_data = self._parse_feedback(response_text, metrics)
-            
-            logger.info(f"Feedback generated for session {session.id}")
+
+            logger.info(
+                f"Feedback generated for session {session.id}, "
+                f"overall score: {feedback_data['overall_score']}"
+            )
             return feedback_data
-            
+
         except Exception as e:
             logger.error(f"Error generating feedback: {str(e)}")
             return self._get_default_feedback(metrics)
-    
+
     def _build_feedback_prompt(self, session, metrics, pitch_deck):
-        """Build prompt for feedback generation"""
-        
+        """Build the coaching feedback prompt"""
+
         pitch_context = ""
         if pitch_deck:
-            pitch_context = f"\n**Pitch Title:** {pitch_deck.title}\n**Total Slides:** {pitch_deck.total_slides}"
-        
-        prompt = f"""You are an expert pitch coach providing feedback on a practice session.
+            pitch_context = (
+                f"\nPitch Title: {pitch_deck.title}"
+                f"\nTotal Slides: {pitch_deck.total_slides}"
+            )
 
-**Practice Details:**
+        # Truncate transcript to avoid exceeding token limits
+        transcript_excerpt = session.transcript[:500]
+        if len(session.transcript) > 500:
+            transcript_excerpt += "..."
+
+        # Format filler words nicely
+        top_fillers = ", ".join(
+            f"{k}: {v}"
+            for k, v in list(metrics['filler_words_detail'].items())[:5]
+        ) or "none detected"
+
+        prompt = f"""Analyze this pitch practice session and return a JSON coaching report.
+
+PRACTICE DETAILS:
 - Pitch Type: {session.get_pitch_type_display()}
-- Duration: {session.duration_seconds} seconds ({session.duration_seconds // 60} minutes)
-- Target Duration: {session.target_duration_seconds} seconds
+- Duration: {session.duration_seconds}s (target: {session.target_duration_seconds}s)
 {pitch_context}
 
-**Performance Metrics:**
+PERFORMANCE METRICS:
 - Word Count: {metrics['word_count']}
-- Speaking Pace: {metrics['speaking_pace_wpm']:.1f} words per minute
-- Filler Words: {metrics['filler_words_count']} ({', '.join([f"{k}: {v}" for k, v in metrics['filler_words_detail'].items()][:5])})
+- Speaking Pace: {metrics['speaking_pace_wpm']:.1f} WPM (ideal: 140-160 WPM)
+- Filler Words: {metrics['filler_words_count']} total ({top_fillers})
 - Pace Score: {metrics['pace_score']}/100
 - Clarity Score: {metrics['clarity_score']}/100
+- Vocabulary Richness: {metrics['vocabulary_ratio']:.2f} (unique/total words)
 
-**Transcript Excerpt:**
-{session.transcript[:500]}...
+TRANSCRIPT EXCERPT:
+{transcript_excerpt}
 
-**Your Task:**
-Provide personalized coaching feedback in JSON format:
-
+Return ONLY this JSON structure, nothing else:
 {{
-  "confidence_score": 75,
-  "content_score": 80,
-  "structure_score": 70,
-  "feedback": "A detailed paragraph of feedback (3-5 sentences)...",
-  "strengths": ["Strength 1", "Strength 2", "Strength 3"],
-  "improvements": ["Improvement 1", "Improvement 2", "Improvement 3"]
+  "confidence_score": <0-100 int>,
+  "content_score": <0-100 int>,
+  "structure_score": <0-100 int>,
+  "feedback": "<3-5 sentence coaching paragraph referencing actual metrics>",
+  "strengths": ["<specific strength 1>", "<specific strength 2>", "<specific strength 3>"],
+  "improvements": ["<actionable improvement 1>", "<actionable improvement 2>", "<actionable improvement 3>"]
 }}
 
-**Scoring Guidelines:**
-- confidence_score (0-100): Voice energy, conviction, hesitation
-- content_score (0-100): Message clarity, value proposition, completeness
-- structure_score (0-100): Logical flow, organization, transitions
+SCORING GUIDE:
+- confidence_score: voice energy, conviction, absence of hesitation
+- content_score: clarity of message, value proposition, completeness
+- structure_score: logical flow, transitions, opening and closing strength
 
-**Feedback Guidelines:**
-- Be specific and actionable
-- Balance positivity with constructive criticism
-- Reference actual metrics (pace, filler words, etc.)
-- Suggest concrete next steps
-
-Return ONLY valid JSON, no other text."""
+Be specific. Reference the actual numbers. Be encouraging but honest."""
 
         return prompt
-    
+
     def _parse_feedback(self, response_text, metrics):
-        """Parse AI feedback response"""
+        """Parse Groq JSON response into feedback dict"""
         try:
-            response_text = response_text.strip()
-            if response_text.startswith('```json'):
-                response_text = response_text.replace('```json', '').replace('```', '').strip()
-            elif response_text.startswith('```'):
-                response_text = response_text.replace('```', '').strip()
-            
-            feedback = json.loads(response_text)
-            
-            feedback.setdefault('confidence_score', 75)
-            feedback.setdefault('content_score', 75)
-            feedback.setdefault('structure_score', 75)
+            # Strip any accidental markdown fences
+            text = response_text.strip()
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
+
+            feedback = json.loads(text)
+
+            # Fill in any missing keys with safe defaults
+            feedback.setdefault('confidence_score', 70)
+            feedback.setdefault('content_score', 70)
+            feedback.setdefault('structure_score', 70)
             feedback.setdefault('feedback', 'Good effort on your practice session.')
-            feedback.setdefault('strengths', ['Clear delivery'])
-            feedback.setdefault('improvements', ['Keep practicing'])
-            
+            feedback.setdefault('strengths', ['Completed the practice session'])
+            feedback.setdefault('improvements', ['Keep practicing regularly'])
+
+            # Clamp scores to 0-100
+            for key in ('confidence_score', 'content_score', 'structure_score'):
+                feedback[key] = max(0, min(100, int(feedback[key])))
+
+            # Attach analyzer scores (these come from TextAnalyzer, not the LLM)
             feedback['pace_score'] = metrics['pace_score']
             feedback['clarity_score'] = metrics['clarity_score']
-            
-            feedback['overall_score'] = round((
-                feedback['pace_score'] +
-                feedback['clarity_score'] +
-                feedback['confidence_score'] +
-                feedback['content_score'] +
-                feedback['structure_score']
-            ) / 5, 2)
-            
+
+            # Calculate overall as average of all 5 dimensions
+            feedback['overall_score'] = round(
+                (
+                    feedback['pace_score']
+                    + feedback['clarity_score']
+                    + feedback['confidence_score']
+                    + feedback['content_score']
+                    + feedback['structure_score']
+                )
+                / 5,
+                2,
+            )
+
             return feedback
-            
+
         except Exception as e:
-            logger.error(f"Error parsing feedback: {str(e)}")
+            logger.error(f"Error parsing Groq feedback response: {str(e)}")
+            logger.debug(f"Raw response was: {response_text}")
             return self._get_default_feedback(metrics)
-    
+
     def _get_default_feedback(self, metrics):
-        """Get default feedback when AI fails"""
+        """Fallback feedback when Groq call or parsing fails"""
         return {
             'overall_score': 70,
             'pace_score': metrics.get('pace_score', 70),
@@ -142,14 +199,17 @@ Return ONLY valid JSON, no other text."""
             'confidence_score': 70,
             'content_score': 70,
             'structure_score': 70,
-            'feedback': 'Thank you for practicing your pitch. Keep working on your delivery and timing.',
+            'feedback': (
+                'Thank you for practicing your pitch. '
+                'Keep working on your delivery and timing.'
+            ),
             'strengths': [
                 'Completed the practice session',
-                'Demonstrated commitment to improvement'
+                'Demonstrated commitment to improvement',
             ],
             'improvements': [
                 'Focus on reducing filler words',
                 'Work on maintaining consistent pacing',
-                'Practice more frequently for better results'
-            ]
+                'Practice more frequently for better results',
+            ],
         }

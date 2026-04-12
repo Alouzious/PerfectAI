@@ -134,3 +134,98 @@ def get_practice_progress(request):
         'count': progress.count(),
         'results': serializer.data
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_practice_audio(request, session_id):
+    """
+    Receive an audio recording, transcribe it, then trigger analysis.
+
+    Expected request: multipart/form-data with:
+        - audio:            The audio file (required)
+        - duration_seconds: How long the recording is in seconds (optional)
+
+    Flow:
+        1. Validate the session belongs to this user and is in 'pending' state
+        2. Validate and save the audio file
+        3. Transcribe audio → text via Whisper
+        4. Save transcript + duration to session
+        5. Trigger the existing background analysis task
+        6. Return session data immediately (analysis happens in background)
+    """
+    # ── 1. Get session ────────────────────────────────────────────────────────
+    session = get_object_or_404(PracticeSession, id=session_id, user=request.user)
+
+    if session.status not in ('pending', 'failed'):
+        return Response(
+            {
+                'error': 'Cannot submit audio',
+                'detail': (
+                    f"Session is already '{session.status}'. "
+                    "Only pending or failed sessions can receive audio."
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── 2. Validate audio file ────────────────────────────────────────────────
+    audio_file = request.FILES.get('audio')
+    if not audio_file:
+        return Response(
+            {'error': 'No audio file provided. Send the file as "audio" in form-data.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # ── 3. Transcribe ─────────────────────────────────────────────────────────
+    try:
+        from .services.speech_to_text import SpeechToTextService
+        stt = SpeechToTextService()
+        result = stt.transcribe(audio_file)
+    except ValueError as e:
+        # Validation errors (wrong format, too large)
+        return Response(
+            {'error': 'Invalid audio file', 'detail': str(e)},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except RuntimeError as e:
+        # Whisper API errors
+        return Response(
+            {'error': 'Transcription failed', 'detail': str(e)},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    if not result['success']:
+        return Response(
+            {'error': 'No speech detected', 'detail': result.get('error', '')},
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    # ── 4. Update session with transcript ─────────────────────────────────────
+    transcript = result['transcript']
+
+    # Use whisper duration if frontend didn't send one
+    duration = int(request.data.get('duration_seconds', 0))
+    if duration == 0 and result.get('duration'):
+        duration = int(result['duration'])
+
+    session.transcript = transcript
+    session.duration_seconds = duration
+    session.status = 'pending'          # reset so task picks it up cleanly
+    session.save(update_fields=['transcript', 'duration_seconds', 'status'])
+
+    # ── 5. Trigger existing Celery analysis task ───────────────────────────────
+    from .tasks import analyze_practice_session
+    analyze_practice_session.delay(str(session.id))
+
+    # ── 6. Return immediately — analysis runs in background ───────────────────
+    return Response(
+        {
+            'message': 'Audio received and transcribed. Analysis in progress.',
+            'session_id': str(session.id),
+            'transcript_preview': transcript[:200] + ('...' if len(transcript) > 200 else ''),
+            'word_count': len(transcript.split()),
+            'status': 'processing',
+        },
+        status=status.HTTP_202_ACCEPTED,
+    )
