@@ -192,10 +192,29 @@ if not DEBUG:
 # ===== API KEYS =====
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 
+# # ===== CELERY =====
+# REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+# CELERY_BROKER_URL = REDIS_URL
+# CELERY_RESULT_BACKEND = REDIS_URL
+# CELERY_ACCEPT_CONTENT = ['json']
+# CELERY_TASK_SERIALIZER = 'json'
+# CELERY_RESULT_SERIALIZER = 'json'
+# CELERY_TIMEZONE = 'UTC'
+# CELERY_TASK_TIME_LIMIT = 30 * 60
+# CELERY_TASK_SOFT_TIME_LIMIT = 25 * 60
+# CELERY_RESULT_EXPIRES = 3600
+
 # ===== CELERY =====
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-CELERY_BROKER_URL = REDIS_URL
-CELERY_RESULT_BACKEND = REDIS_URL
+
+# Upstash requires SSL cert config
+if REDIS_URL.startswith('rediss://'):
+    CELERY_BROKER_URL = REDIS_URL + ('&' if '?' in REDIS_URL else '?') + 'ssl_cert_reqs=CERT_NONE'
+    CELERY_RESULT_BACKEND = REDIS_URL + ('&' if '?' in REDIS_URL else '?') + 'ssl_cert_reqs=CERT_NONE'
+else:
+    CELERY_BROKER_URL = REDIS_URL
+    CELERY_RESULT_BACKEND = REDIS_URL
+
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
